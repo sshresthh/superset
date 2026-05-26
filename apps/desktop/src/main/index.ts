@@ -1,6 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { settings } from "@superset/local-db";
+import type { Cookie } from "electron";
 import {
 	app,
 	BrowserWindow,
@@ -55,6 +56,8 @@ import { MainWindow } from "./windows/main";
 
 console.log("[main] Local database ready:", !!localDb);
 const IS_DEV = process.env.NODE_ENV === "development";
+const APP_PARTITION = "persist:superset";
+const LOCAL_AUTH_COOKIE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 void applyShellEnvToProcess().catch((error) => {
 	console.error("[main] Failed to apply shell environment:", error);
@@ -66,6 +69,47 @@ if (IS_DEV) {
 	if (workspaceName) {
 		app.setName(`Superset (${workspaceName})`);
 	}
+}
+
+function getCookieRemovalUrl(cookie: Cookie): string {
+	const domain = (cookie.domain || "localhost").replace(/^\./, "");
+	const host = domain.includes(":") ? `[${domain}]` : domain;
+	const pathName = cookie.path?.startsWith("/") ? cookie.path : "/";
+	return `${cookie.secure ? "https" : "http"}://${host}${pathName}`;
+}
+
+function isLocalBetterAuthCookie(cookie: Cookie): boolean {
+	const domain = (cookie.domain || "").replace(/^\./, "");
+	return (
+		LOCAL_AUTH_COOKIE_HOSTS.has(domain) && cookie.name.includes("better-auth")
+	);
+}
+
+async function clearLocalDevAuthCookies(): Promise<void> {
+	if (!IS_DEV) return;
+
+	let apiUrl: URL;
+	try {
+		apiUrl = new URL(mainEnv.NEXT_PUBLIC_API_URL);
+	} catch {
+		return;
+	}
+
+	if (!LOCAL_AUTH_COOKIE_HOSTS.has(apiUrl.hostname)) return;
+
+	const appSession = session.fromPartition(APP_PARTITION);
+	const cookies = await appSession.cookies.get({});
+	const authCookies = cookies.filter(isLocalBetterAuthCookie);
+	if (authCookies.length === 0) return;
+
+	await Promise.all(
+		authCookies.map((cookie) =>
+			appSession.cookies.remove(getCookieRemovalUrl(cookie), cookie.name),
+		),
+	);
+	console.log(
+		`[main] Cleared ${authCookies.length} local Better Auth cookie(s) from ${APP_PARTITION}`,
+	);
 }
 
 // Dev mode: register with execPath + app script so macOS launches Electron with our entry point
@@ -340,6 +384,7 @@ if (!gotTheLock) {
 
 	(async () => {
 		await app.whenReady();
+		await clearLocalDevAuthCookies();
 		registerWithMacOSNotificationCenter();
 		requestAppleEventsAccess();
 		requestLocalNetworkAccess();

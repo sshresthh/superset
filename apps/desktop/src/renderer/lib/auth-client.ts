@@ -54,7 +54,7 @@ export const authClient = createAuthClient({
 		jwtClient(),
 	],
 	fetchOptions: {
-		credentials: "include",
+		credentials: "omit",
 		onRequest: async (context) => {
 			const token = getAuthToken();
 			if (token) {

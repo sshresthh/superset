@@ -1,10 +1,25 @@
-import { type ReactNode, useEffect, useState } from "react";
-import { authClient, setAuthToken, setJwt } from "renderer/lib/auth-client";
+import {
+	type ReactNode,
+	useEffect,
+	useEffectEvent,
+	useRef,
+	useState,
+} from "react";
+import {
+	authClient,
+	getAuthToken,
+	setAuthToken,
+	setJwt,
+} from "renderer/lib/auth-client";
 import { SupersetLogo } from "renderer/routes/sign-in/components/SupersetLogo/SupersetLogo";
 import { electronTrpc } from "../../lib/electron-trpc";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
 	const [isHydrated, setIsHydrated] = useState(false);
+	const activeTokenRef = useRef<string | null>(null);
+	const hydrationStartedRef = useRef(false);
+	const sessionRefetchInFlightRef = useRef(false);
+	const tokenChangeInFlightRef = useRef(false);
 	const { refetch: refetchSession } = authClient.useSession();
 
 	const { data: storedToken, isSuccess } =
@@ -13,82 +28,99 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			refetchOnReconnect: false,
 		});
 
-	useEffect(() => {
-		if (!isSuccess || isHydrated) return;
+	const refetchSessionSafely = useEffectEvent(async (context: string) => {
+		if (sessionRefetchInFlightRef.current) return;
 
-		let cancelled = false;
+		sessionRefetchInFlightRef.current = true;
+		try {
+			await refetchSession({
+				query: { disableCookieCache: true, disableRefresh: true },
+			});
+		} catch (err) {
+			console.warn(`[AuthProvider] session refetch failed ${context}`, err);
+		} finally {
+			sessionRefetchInFlightRef.current = false;
+		}
+	});
 
-		async function hydrate() {
-			if (storedToken?.token && storedToken?.expiresAt) {
-				const isExpired = new Date(storedToken.expiresAt) < new Date();
-				if (!isExpired) {
-					setAuthToken(storedToken.token);
-					try {
-						await refetchSession();
-					} catch (err) {
-						console.warn(
-							"[AuthProvider] session refetch failed during hydration",
-							err,
-						);
+	const hydrateAuth = useEffectEvent(async () => {
+		if (storedToken?.token && storedToken?.expiresAt) {
+			const isExpired = new Date(storedToken.expiresAt) < new Date();
+			if (!isExpired) {
+				activeTokenRef.current = storedToken.token;
+				setAuthToken(storedToken.token);
+				await refetchSessionSafely("during hydration");
+				try {
+					const res = await authClient.token();
+					if (res.data?.token) {
+						setJwt(res.data.token);
 					}
-					try {
-						const res = await authClient.token();
-						if (res.data?.token) {
-							setJwt(res.data.token);
-						}
-					} catch (err) {
-						console.warn(
-							"[AuthProvider] JWT fetch failed during hydration",
-							err,
-						);
-					}
+				} catch (err) {
+					console.warn("[AuthProvider] JWT fetch failed during hydration", err);
 				}
 			}
+		}
+	});
+
+	useEffect(() => {
+		if (!isSuccess || isHydrated || hydrationStartedRef.current) return;
+
+		let cancelled = false;
+		hydrationStartedRef.current = true;
+
+		hydrateAuth().finally(() => {
 			if (!cancelled) {
 				setIsHydrated(true);
 			}
-		}
-
-		hydrate();
+		});
 		return () => {
 			cancelled = true;
 		};
-	}, [storedToken, isSuccess, isHydrated, refetchSession]);
+	}, [isSuccess, isHydrated]);
+
+	const handleTokenChanged = useEffectEvent(
+		async (data: { token: string; expiresAt: string } | null) => {
+			if (tokenChangeInFlightRef.current) return;
+
+			tokenChangeInFlightRef.current = true;
+			try {
+				if (data?.token && data?.expiresAt) {
+					if (activeTokenRef.current === data.token) {
+						setIsHydrated(true);
+						return;
+					}
+
+					activeTokenRef.current = data.token;
+					setAuthToken(data.token);
+					await refetchSessionSafely("after token change");
+					setIsHydrated(true);
+				} else if (data === null) {
+					activeTokenRef.current = null;
+					setAuthToken(null);
+					setJwt(null);
+					await refetchSessionSafely("after token cleared");
+				}
+			} finally {
+				tokenChangeInFlightRef.current = false;
+			}
+		},
+	);
 
 	electronTrpc.auth.onTokenChanged.useSubscription(undefined, {
-		onData: async (data) => {
-			if (data?.token && data?.expiresAt) {
-				setAuthToken(null);
-				await authClient.signOut({ fetchOptions: { throw: false } });
-				setAuthToken(data.token);
-				try {
-					await refetchSession();
-				} catch (err) {
-					console.warn(
-						"[AuthProvider] session refetch failed after token change",
-						err,
-					);
-				}
-				setIsHydrated(true);
-			} else if (data === null) {
-				setAuthToken(null);
-				setJwt(null);
-				try {
-					await refetchSession();
-				} catch (err) {
-					console.warn(
-						"[AuthProvider] session refetch failed after token cleared",
-						err,
-					);
-				}
-			}
+		onData: (data) => {
+			void handleTokenChanged(data);
 		},
 	});
 
 	useEffect(() => {
 		if (!isHydrated) return;
 
-		const refreshJwt = () =>
+		const refreshJwt = () => {
+			if (!getAuthToken()) {
+				setJwt(null);
+				return;
+			}
+
 			authClient
 				.token()
 				.then((res) => {
@@ -99,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 				.catch((err: unknown) => {
 					console.warn("[AuthProvider] JWT refresh failed", err);
 				});
+		};
 
 		refreshJwt();
 		const interval = setInterval(refreshJwt, 50 * 60 * 1000);

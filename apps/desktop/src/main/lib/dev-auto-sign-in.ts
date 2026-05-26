@@ -69,7 +69,7 @@ async function waitForApiReady(): Promise<boolean> {
 async function isStoredTokenValid(token: string): Promise<boolean> {
 	try {
 		const res = await fetch(
-			`${mainEnv.NEXT_PUBLIC_API_URL}/api/auth/get-session`,
+			`${mainEnv.NEXT_PUBLIC_API_URL}/api/auth/get-session?disableCookieCache=true&disableRefresh=true`,
 			{
 				headers: { Authorization: `Bearer ${token}` },
 				signal: AbortSignal.timeout(DEV_AUTH_TIMEOUT_MS),

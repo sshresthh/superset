@@ -103,9 +103,13 @@ export function PresetRow({
 				? preset.commands.length > 1
 					? "New tab + panes"
 					: "New tab"
-				: preset.commands.length > 1
-					? "Single tab + panes"
-					: "Split pane";
+				: modeValue === "sequential"
+					? preset.commands.length > 1
+						? "Sequential"
+						: "Split pane"
+					: preset.commands.length > 1
+						? "Single tab + panes"
+						: "Split pane";
 	const firstCommand =
 		preset.commands.find((cmd) => cmd.trim().length > 0)?.trim() ??
 		"Empty command";

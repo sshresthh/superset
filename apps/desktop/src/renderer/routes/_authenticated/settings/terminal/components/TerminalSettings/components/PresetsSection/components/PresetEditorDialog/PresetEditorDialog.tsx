@@ -256,6 +256,7 @@ export function PresetEditorDialog({
 
 	const launchModeOptions = hasMultipleCommands
 		? [
+				{ value: "sequential", label: "All in current tab" },
 				{ value: "split-pane", label: "All in current tab (split panes)" },
 				{ value: "new-tab", label: "Each in its own new tab" },
 				{
@@ -269,7 +270,7 @@ export function PresetEditorDialog({
 			];
 	const launchModeValue = hasMultipleCommands
 		? modeValue
-		: modeValue === "split-pane"
+		: modeValue === "split-pane" || modeValue === "sequential"
 			? "split-pane"
 			: "new-tab";
 

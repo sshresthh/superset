@@ -4,6 +4,7 @@ export type PresetOpenTarget = "new-tab" | "active-tab";
 export type PresetMode = ExecutionMode;
 
 export type PresetLaunchPlan =
+	| "active-terminal"
 	| "new-tab-single"
 	| "new-tab-multi-pane"
 	| "new-tab-per-command"
@@ -15,15 +16,26 @@ export function getPresetLaunchPlan({
 	target,
 	commandCount,
 	hasActiveTab,
+	hasActiveTerminal,
 }: {
 	mode: PresetMode;
 	target: PresetOpenTarget;
 	commandCount: number;
 	hasActiveTab: boolean;
+	hasActiveTerminal?: boolean;
 }): PresetLaunchPlan {
 	const hasMultipleCommands = commandCount > 1;
 	const shouldUseActiveTab =
-		target === "active-tab" && mode === "split-pane" && hasActiveTab;
+		target === "active-tab" &&
+		(mode === "split-pane" || mode === "sequential") &&
+		hasActiveTab;
+
+	if (mode === "sequential") {
+		if (target === "active-tab" && hasActiveTerminal) {
+			return "active-terminal";
+		}
+		return "new-tab-single";
+	}
 
 	if (shouldUseActiveTab) {
 		return hasMultipleCommands ? "active-tab-multi-pane" : "active-tab-single";
